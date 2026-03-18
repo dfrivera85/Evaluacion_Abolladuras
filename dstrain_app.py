@@ -299,15 +299,16 @@ with st.sidebar:
     if app_mode == "Evaluación de Strain":
         show_all_cols = st.checkbox("Mostrar todas las columnas de entrada", value=False)
     else:
-        st.markdown("### 🌊 Datos SCADA y Topología")
-        juntas_file = st.file_uploader("Seleccione juntas_soldadura.csv", type=["csv"], key="juntas")
-        scada_succion = st.file_uploader("SCADA Succión (CSV)", type=["csv"], key="succion")
-        scada_descarga = st.file_uploader("SCADA Descarga (CSV)", type=["csv"], key="descarga")
-        
-        st.markdown("#### Propiedades del Fluido (Por defecto Crudo)")
-        specific_gravity = st.number_input("Gravedad Específica", value=0.85, step=0.01)
-        viscosity = st.number_input("Viscosidad (cSt)", value=15.0, step=0.1)
         show_all_cols = False
+        
+    st.markdown("### 🌊 Datos SCADA y Topología")
+    juntas_file = st.file_uploader("Seleccione juntas_soldadura.csv", type=["csv"], key="juntas")
+    scada_succion = st.file_uploader("SCADA Succión (CSV)", type=["csv"], key="succion")
+    scada_descarga = st.file_uploader("SCADA Descarga (CSV)", type=["csv"], key="descarga")
+    
+    st.markdown("#### Propiedades del Fluido (Por defecto Crudo)")
+    specific_gravity = st.number_input("Gravedad Específica", value=0.85, step=0.01)
+    viscosity = st.number_input("Viscosidad (cSt)", value=15.0, step=0.1)
         
     st.markdown("---")
     st.markdown("""
@@ -424,7 +425,7 @@ if app_mode == "Análisis Rainflow":
                 
                 analyzer = rainflow.DentSpectrumAnalyzer(specific_gravity, viscosity)
                 
-                cycles = analyzer.interpolate_pressure_timeseries(
+                cycles, time_span_years = analyzer.interpolate_pressure_timeseries(
                     scada_discharge_df=df_descarga,
                     scada_suction_df=df_succion,
                     dent_dict=dent_dict,
@@ -487,22 +488,23 @@ st.caption(f"📊 {n_rows} anomalías cargadas · {n_cols_in} columnas")
 st.markdown("---")
 
 # ─── Botón de cálculo ─────────────────────────────────────────────────────────
-st.markdown('<p class="section-title">Cálculo de Strain</p>', unsafe_allow_html=True)
+st.markdown('<p class="section-title">Cálculo de Strain y Vida Remanente</p>', unsafe_allow_html=True)
 
-col_btn, col_info = st.columns([1, 4])
-with col_btn:
+col_btn_1, col_btn_2, col_info = st.columns([1, 1, 3])
+with col_btn_1:
     run_btn = st.button("▶ Procesar Strain", use_container_width=True)
+with col_btn_2:
+    run_fatigue_btn = st.button("Calcular Vida Remanente", use_container_width=True)
 
 with col_info:
     st.markdown("""
     <div style="color:#64748b; font-size:0.85rem; margin-top:0.5rem;">
-    Calcula la deformación de strain para cada abolladura usando el algoritmo de perfil de
-    desplazamiento (polinomio de 6° grado). Aplica criterio API-1160: falla si |ε| ≥ 6%.
+    Calcula la deformación de strain (API-1160) y/o Vida a la Fatiga (API-1183) para abolladuras.
     </div>
     """, unsafe_allow_html=True)
 df_input.to_csv("df_input.csv", index=False)
 
-if run_btn or "df_result" in st.session_state:
+if run_btn or run_fatigue_btn or "df_result" in st.session_state:
     if run_btn:
         with st.spinner("Calculando strain para todas las anomalías…"):
             try:
@@ -510,6 +512,80 @@ if run_btn or "df_result" in st.session_state:
                 # Ensure unique index to avoid Styler errors
                 df_result = df_result.reset_index(drop=True)
                 st.session_state["df_result"] = df_result
+            except Exception as e:
+                st.error(f"❌ Error durante el cálculo: {e}")
+                st.stop()
+    elif run_fatigue_btn:
+        with st.spinner("Calculando Vida Remanente para todas las abolladuras..."):
+            try:
+                if "df_result" in st.session_state:
+                    df_res = st.session_state["df_result"].copy()
+                else:
+                    df_res = process_dataframe(df_input.copy()).reset_index(drop=True)
+                
+                if not (juntas_file and scada_succion and scada_descarga):
+                    st.error("⚠️ Para calcular la Vida Remanente, debe cargar los 3 archivos CSV laterales.")
+                    st.stop()
+                
+                import rainflow
+                from dstrain_module import calcular_screening_fatiga, _parse_clock_position, COL, _to_float
+                import tempfile
+                
+                df_succion = safe_read_csv(scada_succion)
+                if 'timestamp' not in df_succion.columns and 'Fecha' in df_succion.columns:
+                     df_succion.rename(columns={'Fecha': 'timestamp'}, inplace=True)
+                if 'presion_psi' not in df_succion.columns and 'Presion' in df_succion.columns:
+                     df_succion.rename(columns={'Presion': 'presion_psi'}, inplace=True)
+                     
+                df_descarga = safe_read_csv(scada_descarga)
+                if 'timestamp' not in df_descarga.columns and 'Fecha' in df_descarga.columns:
+                     df_descarga.rename(columns={'Fecha': 'timestamp'}, inplace=True)
+                if 'presion_psi' not in df_descarga.columns and 'Presion' in df_descarga.columns:
+                     df_descarga.rename(columns={'Presion': 'presion_psi'}, inplace=True)
+                     
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp:
+                    tmp.write(juntas_file.getvalue())
+                    juntas_path = tmp.name
+                    
+                analyzer = rainflow.DentSpectrumAnalyzer(specific_gravity, viscosity)
+                dist_col = "Dist. Registro (km)" if "Dist. Registro (km)" in df_res.columns else df_res.columns[0]
+                
+                vidas = []
+                for idx, row in df_res.iterrows():
+                    tipo_anomalia = str(row.iloc[COL["TipoAnomalia"]]).upper() if not pd.isna(row.iloc[COL["TipoAnomalia"]]) else ""
+                    if "ABOL" not in tipo_anomalia and "DENT" not in tipo_anomalia:
+                        vidas.append("No evaluada")
+                        continue
+                        
+                    lx = row[dist_col]
+                    de_mm = _to_float(row.iloc[COL["DE"]])
+                    t_mm = _to_float(row.iloc[COL["Espesor"]])
+                    smys_psi = _to_float(row.iloc[COL["SMYS"]])
+                    dti_pct = _to_float(row.iloc[COL["ProfPct"]])
+                    clock_pos = _parse_clock_position(row.iloc[COL["PosicionHoraria"]])
+                    
+                    try:
+                        dent_dict, station_dict = rainflow.extract_topological_data(juntas_path, lx)
+                        cycles, time_span_years = analyzer.interpolate_pressure_timeseries(
+                            scada_discharge_df=df_descarga,
+                            scada_suction_df=df_succion,
+                            dent_dict=dent_dict,
+                            station_dict=station_dict,
+                            time_col='timestamp',
+                            pressure_col='presion_psi'
+                        )
+                        if cycles:
+                            df_cycles = pd.DataFrame(cycles, columns=["Rango de Presión (psi)", "Conteo de Ciclos"])
+                            vr = calcular_screening_fatiga(df_cycles, de_mm, t_mm, smys_psi, dti_pct, clock_pos, time_span_years)
+                            vidas.append(vr)
+                        else:
+                            vidas.append("Sin ciclos SCADA")
+                    except Exception as e:
+                        vidas.append(f"Error ({e})")
+                        
+                df_res["Vida Remanente (Años)"] = vidas
+                st.session_state["df_result"] = df_res
+                df_result = st.session_state["df_result"]
             except Exception as e:
                 st.error(f"❌ Error durante el cálculo: {e}")
                 st.stop()
@@ -543,7 +619,7 @@ if run_btn or "df_result" in st.session_state:
 
     # ─── DataFrame de resultados ──────────────────────────────────────────────
     # Columnas a mostrar: datos clave + resultados
-    res_cols_to_show = key_cols + ["Strain_calc", "Dictamen_Strain"]
+    res_cols_to_show = key_cols + ["Strain_calc", "Dictamen_Strain", "Vida Remanente (Años)"]
     res_cols_to_show = [c for c in res_cols_to_show if c in df_result.columns]
 
     df_display = df_result[res_cols_to_show].copy()

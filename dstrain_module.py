@@ -352,3 +352,113 @@ def check_weld_interaction(de_mm: float, dist_girth_weld_mm: float, clock_pos: f
         "is_restrained": is_restrained
     }
 
+def calcular_screening_fatiga(
+    df_rainflow: pd.DataFrame,
+    de_mm: float,
+    t_mm: float,
+    smys_psi: float,
+    dti_pct: float,
+    clock_pos: float,
+    time_span_years: float = 1.0
+) -> float | str:
+    """
+    Calcula la Vida a la Fatiga por Filtrado (Screening) según API 1183 (2020) Cap. 7.4.3.
+    
+    Parámetros:
+    -----------
+    df_rainflow     : pd.DataFrame con columnas 'Rango de Presión (psi)' y 'Conteo de Ciclos'
+    de_mm           : Diámetro externo en mm
+    t_mm            : Espesor de pared en mm
+    smys_psi        : SMYS en psi
+    dti_pct         : Profundidad relativa de abolladura (%)
+    clock_pos       : Posición horaria general
+    time_span_years : Duración temporal real del espectro de presión SCADA analizado (en años).
+                      Ejemplo: 1.0 si se procesó un año completo, 0.25 si fue un trimestre.
+                      Valor por defecto: 1.0
+
+    Retorna:
+    --------
+    Vida remanente en años (float), o el string 'Requiere FFS' si no aplica.
+    """
+    if df_rainflow is None or df_rainflow.empty:
+        return "Requiere FFS"
+
+    if de_mm <= 0 or t_mm <= 0 or smys_psi <= 0:
+        return "Requiere FFS"
+
+    # Paso A: Validación de Aplicabilidad
+    is_restrained = (4.0 <= clock_pos <= 8.0)
+    de_in = de_mm / 25.4
+    
+    if de_in <= 12.75:
+        is_shallow = dti_pct < 4.0
+    else:
+        is_shallow = dti_pct < 2.5
+        
+    if is_restrained and not is_shallow:
+        return "Requiere FFS"
+
+    # Paso B: Cálculo de K_M_Max
+    od_t = de_mm / t_mm
+    y = od_t
+    
+    delta_p = df_rainflow['Rango de Presión (psi)'].values
+    ciclos = df_rainflow['Conteo de Ciclos'].values
+    
+    delta_p_smys = (2.0 * t_mm * smys_psi) / de_mm
+    x = delta_p / delta_p_smys  # Fracción de rango de presión / presión de cedencia
+
+    if is_restrained:
+        k_m_max = np.full_like(delta_p, 0.1183 * od_t - 1.146)
+        k_m_max = np.maximum(k_m_max, 1.0)
+    else:
+        # Eq 16 API 1183
+        a00 = 6.61847
+        a10 = -12.26386
+        a01 = 0.06748
+        a20 = 15.58507
+        a11 = -0.12358
+        a02 = -0.00032
+        a30 = -8.58441
+        a21 = 0.03803
+        a12 = 0.00047
+        
+        k_m_max = (
+            a00 + 
+            a10 * x + 
+            a01 * y + 
+            a20 * (x**2) + 
+            a11 * x * y + 
+            a02 * (y**2) + 
+            a30 * (x**3) + 
+            a21 * (x**2) * y + 
+            a12 * x * (y**2)
+        )
+        k_m_max = np.maximum(k_m_max, 1.0)
+        
+    # Paso C: Esfuerzos Críticos (Barlow)
+    delta_sigma_hoop_psi = delta_p * de_mm / (2.0 * t_mm)
+    delta_sigma_peak_psi = delta_sigma_hoop_psi * k_m_max
+    
+    # Esfuerzo a ksi
+    delta_sigma_peak_ksi = delta_sigma_peak_psi / 1000.0
+    delta_sigma_peak_ksi = np.where(delta_sigma_peak_ksi <= 0, 1e-9, delta_sigma_peak_ksi)
+    
+    # Paso D: Daño por Fatiga y Regla de Miner (Eq 12)
+    m = 3.0
+    log10_C = 10.08514
+    
+    log10_n_falla = log10_C - m * np.log10(delta_sigma_peak_ksi)
+    n_falla = 10 ** log10_n_falla
+    
+    d_i = ciclos / n_falla
+    d_total = np.sum(d_i)
+    
+    if d_total > 0:
+        # Vida remanente = (1 / D_total) × Time Span del espectro analizado
+        # D_total es el daño acumulado por unidad de espectro; al multiplicar por
+        # time_span_years se obtiene directamente la vida remanente en años.
+        vida_remanente = (1.0 / d_total) * time_span_years
+        return float(vida_remanente)
+    else:
+        return float('inf')

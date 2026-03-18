@@ -278,11 +278,11 @@ class DentSpectrumAnalyzer:
     def interpolate_pressure_timeseries(self, scada_discharge_df, scada_suction_df, dent_dict, station_dict, time_col='timestamp', pressure_col='pressure_psi'):
         """
         Aplica el Enfoque A (Ecuación 5 - Interpolación en el dominio del tiempo).
-        Estima el Px (presión en la abolladura) y devuelve los conteos en 25 bins.
+        Estima el Px (presión en la abolladura) y devuelve una tupla: (conteos de 25 bins, time_span_years).
         """
         merged = self._merge_scada(scada_discharge_df, scada_suction_df, time_col, pressure_col)
         if merged.empty:
-            return []
+            return [], 0.0
             
         P1 = merged[f'{pressure_col}_discharge'].values
         P2 = merged[f'{pressure_col}_suction'].values
@@ -321,9 +321,15 @@ class DentSpectrumAnalyzer:
         
         pd.DataFrame([Px]).to_csv('Px.csv', index=False)
         
+        # Calcular la duración (Time Span) en años
+        time_diff = merged[time_col].max() - merged[time_col].min()
+        time_span_years = time_diff.total_seconds() / (365.25 * 24 * 3600)
+        
+        if time_span_years <= 0:
+            time_span_years = 1.0  # fallback si hay un solo registro o error
 
-        # Aplicar el conteo Rainflow y retornar los 25 bins resultantes
-        return count_cycles(Px, nbins=25)
+        # Aplicar el conteo Rainflow y retornar los 25 bins resultantes junto con el time_span
+        return count_cycles(Px, nbins=25), float(time_span_years)
 
     def interpolate_rainflow_cycles(self, scada_discharge_df, scada_suction_df, dent_dict, station_dict, pressure_col='pressure_psi'):
         """
