@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 import openpyxl
 import io
+import traceback
 from dstrain_module import process_dataframe, COL
 
 # ─── Configuración de página ──────────────────────────────────────────────────
@@ -33,132 +34,121 @@ st.markdown("""
         font-family: 'Inter', sans-serif;
     }
 
-    /* Fondo degradado oscuro */
+    /* Fondo claro profesional */
     .stApp {
-        background: linear-gradient(135deg, #0f1724 0%, #1a2740 50%, #0d1e35 100%);
+        background-color: #f8fafc;
         min-height: 100vh;
     }
 
     /* Header principal */
     .main-header {
-        background: linear-gradient(90deg, #1e3a5f 0%, #2563eb 100%);
+        background: linear-gradient(90deg, #1e40af 0%, #3b82f6 100%);
         border-radius: 16px;
         padding: 2rem 2.5rem;
         margin-bottom: 2rem;
-        box-shadow: 0 8px 32px rgba(37, 99, 235, 0.35);
-        border: 1px solid rgba(255,255,255,0.08);
+        box-shadow: 0 10px 25px -5px rgba(59, 130, 246, 0.2);
+        border: 1px solid rgba(255,255,255,0.1);
     }
     .main-header h1 {
-        color: #fff;
+        color: #ffffff;
         font-size: 2rem;
         font-weight: 700;
         margin: 0 0 0.25rem 0;
         letter-spacing: -0.5px;
     }
     .main-header p {
-        color: rgba(255,255,255,0.75);
+        color: rgba(255,255,255,0.9);
         font-size: 0.95rem;
         margin: 0;
     }
 
     /* Tarjetas de métricas */
     .metric-card {
-        background: rgba(255,255,255,0.05);
-        border: 1px solid rgba(255,255,255,0.1);
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
         border-radius: 12px;
         padding: 1.25rem 1.5rem;
         text-align: center;
-        backdrop-filter: blur(8px);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
     }
     .metric-card .metric-value {
         font-size: 2rem;
         font-weight: 700;
+        color: #1e293b;
     }
     .metric-card .metric-label {
         font-size: 0.8rem;
-        color: rgba(255,255,255,0.6);
+        color: #64748b;
         text-transform: uppercase;
         letter-spacing: 0.5px;
         margin-top: 0.25rem;
     }
-    .metric-red   { color: #f87171; }
-    .metric-green { color: #4ade80; }
-    .metric-gray  { color: #94a3b8; }
-    .metric-yellow{ color: #fbbf24; }
+    .metric-red   { color: #ef4444 !important; }
+    .metric-green { color: #10b981 !important; }
+    .metric-gray  { color: #64748b !important; }
+    .metric-yellow{ color: #f59e0b !important; }
 
     /* Sección */
     .section-title {
-        color: #93c5fd;
-        font-size: 0.8rem;
-        font-weight: 600;
+        color: #1e40af;
+        font-size: 0.85rem;
+        font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 1px;
-        margin-bottom: 0.75rem;
+        margin-bottom: 1rem;
         padding-bottom: 0.5rem;
-        border-bottom: 1px solid rgba(147,197,253,0.25);
+        border-bottom: 2px solid #e2e8f0;
     }
 
     /* Sidebar */
     [data-testid="stSidebar"] {
-        background: rgba(15, 23, 36, 0.85) !important;
-        border-right: 1px solid rgba(255,255,255,0.06);
+        background-color: #ffffff !important;
+        border-right: 1px solid #e2e8f0;
     }
 
     /* Botón principal */
     .stButton > button {
-        background: linear-gradient(90deg, #2563eb, #1d4ed8);
+        background: #2563eb;
         color: white;
         border: none;
         border-radius: 8px;
         padding: 0.6rem 1.5rem;
         font-weight: 600;
-        font-size: 0.9rem;
-        transition: all 0.2s ease;
-        box-shadow: 0 4px 12px rgba(37,99,235,0.3);
+        transition: all 0.2s;
     }
     .stButton > button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 6px 16px rgba(37,99,235,0.45);
-    }
-
-    /* Download button */
-    [data-testid="stDownloadButton"] > button {
-        background: linear-gradient(90deg, #059669, #047857);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        font-weight: 600;
-        box-shadow: 0 4px 12px rgba(5,150,105,0.3);
+        background: #1d4ed8;
+        border-color: #1d4ed8;
     }
 
     /* Info box */
     .info-box {
-        background: rgba(37, 99, 235, 0.12);
-        border: 1px solid rgba(37, 99, 235, 0.3);
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
         border-radius: 10px;
         padding: 1rem 1.25rem;
-        color: #93c5fd;
+        color: #1e40af;
         font-size: 0.88rem;
         margin-bottom: 1rem;
     }
 
-    /* DataFrame */
-    [data-testid="stDataFrame"] {
-        border-radius: 10px;
-        overflow: hidden;
+    /* Ajustes para textos generales */
+    p, span, label {
+        color: #334155;
     }
 
     div[data-testid="stMetric"] {
-        background: rgba(255,255,255,0.04);
+        background: #ffffff;
         border-radius: 10px;
         padding: 0.75rem 1rem;
-        border: 1px solid rgba(255,255,255,0.08);
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
     div[data-testid="stMetric"] label {
-        color: #94a3b8 !important;
+        color: #64748b !important;
     }
     div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
-        color: #e2e8f0 !important;
+        color: #0f172a !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -237,6 +227,20 @@ def load_excel(file_bytes: bytes, sheet_name: str = "EntradaDatos") -> pd.DataFr
     return df
 
 
+def safe_read_csv(file_obj):
+    """
+    Lee un archivo CSV intentando UTF-8 y cayendo a Latin-1 si falla.
+    """
+    try:
+        if hasattr(file_obj, 'seek'):
+            file_obj.seek(0)
+        return pd.read_csv(file_obj)
+    except UnicodeDecodeError:
+        if hasattr(file_obj, 'seek'):
+            file_obj.seek(0)
+        return pd.read_csv(file_obj, encoding="latin1")
+
+
 # ─── Función para colorear dictamen ──────────────────────────────────────────
 def color_dictamen(val):
     if isinstance(val, str):
@@ -279,6 +283,9 @@ st.markdown("""
 
 # Sidebar
 with st.sidebar:
+    app_mode = st.radio("Modo de Operación", ["Evaluación de Strain", "Análisis Rainflow"])
+    st.markdown("---")
+    
     st.markdown("### 📂 Archivo de datos")
     uploaded = st.file_uploader(
         "Seleccione el archivo Excel (.xlsm / .xlsx)",
@@ -286,9 +293,22 @@ with st.sidebar:
         help="Hoja requerida: EntradaDatos · Datos desde fila 8",
     )
     st.markdown("---")
-    st.markdown("### ⚙️ Configuración")
+    st.markdown("### ⚙️ Configuración General")
     sheet_name = st.text_input("Nombre de hoja", value="EntradaDatos")
-    show_all_cols = st.checkbox("Mostrar todas las columnas de entrada", value=False)
+    
+    if app_mode == "Evaluación de Strain":
+        show_all_cols = st.checkbox("Mostrar todas las columnas de entrada", value=False)
+    else:
+        st.markdown("### 🌊 Datos SCADA y Topología")
+        juntas_file = st.file_uploader("Seleccione juntas_soldadura.csv", type=["csv"], key="juntas")
+        scada_succion = st.file_uploader("SCADA Succión (CSV)", type=["csv"], key="succion")
+        scada_descarga = st.file_uploader("SCADA Descarga (CSV)", type=["csv"], key="descarga")
+        
+        st.markdown("#### Propiedades del Fluido (Por defecto Crudo)")
+        specific_gravity = st.number_input("Gravedad Específica", value=0.85, step=0.01)
+        viscosity = st.number_input("Viscosidad (cSt)", value=15.0, step=0.1)
+        show_all_cols = False
+        
     st.markdown("---")
     st.markdown("""
     <div style='color:#64748b; font-size:0.78rem; line-height:1.6;'>
@@ -296,12 +316,11 @@ with st.sidebar:
     Algoritmo de strain según perfil de abolladura (polinomio de 6° grado).
     Criterio de falla: |ε| ≥ 6%.<br><br>
     <b style='color:#94a3b8;'>Normas aplicadas</b><br>
-    API-1160 · ASME B31.4
+    API-1160 · ASME B31.4 · API-1183
     </div>
     """, unsafe_allow_html=True)
 
 
-# ─── Contenido principal ──────────────────────────────────────────────────────
 if uploaded is None:
     st.markdown("""
     <div class="info-box">
@@ -323,7 +342,7 @@ if uploaded is None:
         st.markdown("""
         <div class="metric-card">
             <div class="metric-value metric-gray">2</div>
-            <div class="metric-label">Verificar datos</div>
+            <div class="metric-label">Verificar datos y SCADA</div>
         </div>
         """, unsafe_allow_html=True)
     with col3:
@@ -350,6 +369,101 @@ if df_input.empty:
 
 n_rows = len(df_input)
 n_cols_in = len(df_input.columns)
+
+# ─── Contenido principal ──────────────────────────────────────────────────────
+if app_mode == "Análisis Rainflow":
+    import rainflow
+    import tempfile
+    import os
+    st.markdown('<p class="section-title">Análisis Rainflow (Datos SCADA)</p>', unsafe_allow_html=True)
+    st.markdown("Seleccione la abolladura de interés para estimar su espectro de presión y ejecutar el recuento.")
+    
+    if not (juntas_file and scada_succion and scada_descarga):
+        st.warning("⚠️ Cargue los 3 archivos CSV laterales (juntas, succión y descarga) para continuar.")
+        st.stop()
+        
+    try:
+        df_succion = safe_read_csv(scada_succion)
+        if 'timestamp' not in df_succion.columns and 'Fecha' in df_succion.columns:
+             df_succion.rename(columns={'Fecha': 'timestamp'}, inplace=True)
+        if 'presion_psi' not in df_succion.columns and 'Presion' in df_succion.columns:
+             df_succion.rename(columns={'Presion': 'presion_psi'}, inplace=True)
+             
+        df_descarga = safe_read_csv(scada_descarga)
+        if 'timestamp' not in df_descarga.columns and 'Fecha' in df_descarga.columns:
+             df_descarga.rename(columns={'Fecha': 'timestamp'}, inplace=True)
+        if 'presion_psi' not in df_descarga.columns and 'Presion' in df_descarga.columns:
+             df_descarga.rename(columns={'Presion': 'presion_psi'}, inplace=True)
+             
+        # Guardar juntas.csv temporalmente
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp:
+            tmp.write(juntas_file.getvalue())
+            juntas_path = tmp.name
+            
+    except Exception as e:
+        st.error(f"❌ Error al leer archivos CSV: {e}")
+        st.stop()
+        
+    # Crear selectbox para abolladuras
+    # Asumimos que la columna de distancia es "Dist. Registro (km)"
+    dist_col = "Dist. Registro (km)" if "Dist. Registro (km)" in df_input.columns else df_input.columns[0]
+    
+    dent_options = []
+    for idx, row in df_input.iterrows():
+        dist = row[dist_col]
+        dent_options.append(f"Índice {idx} - Abscisa {dist} km")
+        
+    selected_dent_str = st.selectbox("Seleccione la Abolladura:", dent_options)
+    selected_idx = int(selected_dent_str.split(" - ")[0].replace("Índice ", ""))
+    selected_Lx = df_input.loc[selected_idx, dist_col]
+    
+    if st.button("▶ Ejecutar Análisis Rainflow en Abolladura", use_container_width=True):
+        with st.spinner("Extrayendo topología y calculando ciclos…"):
+            try:
+                dent_dict, station_dict = rainflow.extract_topological_data(juntas_path, selected_Lx)
+                
+                analyzer = rainflow.DentSpectrumAnalyzer(specific_gravity, viscosity)
+                
+                cycles = analyzer.interpolate_pressure_timeseries(
+                    scada_discharge_df=df_descarga,
+                    scada_suction_df=df_succion,
+                    dent_dict=dent_dict,
+                    station_dict=station_dict,
+                    time_col='timestamp',
+                    pressure_col='presion_psi'
+                )
+                
+                if cycles:
+                    df_cycles = pd.DataFrame(cycles, columns=["Rango de Presión (psi)", "Conteo de Ciclos"])
+                    
+                    st.markdown(f"#### Espectro Rainflow (Interpolación Temporal) - Abscisa {selected_Lx/1000.0:.3f} km")
+                    st.bar_chart(df_cycles.set_index("Rango de Presión (psi)"), use_container_width=True)
+                    
+                    st.markdown("#### Datos de Agrupación (25 Bins)")
+                    st.dataframe(df_cycles, use_container_width=True)
+                else:
+                    st.warning("No se encontraron ciclos o no hubo solapamiento de tiempo en los SCADA.")
+            except Exception as e:
+                st.error(f"❌ Error durante el análisis Rainflow: {e}")
+                
+                # Proporcionar detalles adicionales del error
+                with st.expander("🔍 Detalles técnicos del error"):
+                    st.exception(e)
+                    st.markdown("### Traza completa (Traceback)")
+                    st.code(traceback.format_exc())
+                    
+                    # Sugerencias basadas en el tipo de error
+                    if isinstance(e, KeyError):
+                        st.warning(f"⚠️ **Sugerencia:** Falta la columna `{e}` en uno de los archivos CSV cargados. "
+                                   "Verifique que `juntas_soldadura.csv` y los archivos SCADA tengan las columnas requeridas.")
+                    elif isinstance(e, ValueError) and "nbins" in str(e):
+                        st.info("ℹ️ **Sugerencia:** Hubo un problema al agrupar los datos en bins. Verifique que los datos de presión sean consistentes.")
+                    elif "timestamp" in str(e).lower():
+                        st.warning("⚠️ **Sugerencia:** Verifique que la columna de tiempo en los archivos SCADA sea correcta (ej: 'Fecha' o 'timestamp').")
+                
+    st.stop()
+
+
 
 # ─── Preview de datos de entrada ─────────────────────────────────────────────
 st.markdown('<p class="section-title">Vista previa · Datos de entrada</p>', unsafe_allow_html=True)
