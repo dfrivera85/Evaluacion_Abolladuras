@@ -60,6 +60,16 @@ def is_dent(anomaly_type: str) -> bool:
     return any(kw in s for kw in ["ABOL", "LLADUR", "DENT", "DIÁM", "DIAM", "INTER"])
 
 
+def is_wrinkle_anomaly(anomaly_type: str) -> bool:
+    """
+    Devuelve True si el tipo de anomalía corresponde a una arruga u ondulación.
+    """
+    if pd.isna(anomaly_type):
+        return False
+    s = str(anomaly_type).upper()
+    return any(kw in s for kw in ["ARRUGA", "WRINKLE", "ONDULACIÓN", "ONDULACION", "RIPPLE"])
+
+
 def is_repaired(comment: str) -> bool:
     """
     Equivalente a Sub is_repaired() en keys.txt.
@@ -189,6 +199,44 @@ def strain_f(de: float, dti: float, li: float, W: float, t: float) -> float:
 # Clasificación de una fila (lógica de dStrain)
 # ---------------------------------------------------------------------------
 
+def evaluate_wrinkle(de: float, t: float, p_op: float, dti: float, interacts_girth: bool) -> dict:
+    """
+    Evalúa arrugas y ondulaciones según ASME B31.4 sección 451.6.2.8.
+    """
+    if t == 0 or de == 0:
+        return {"Strain_calc": None, "Dictamen_Strain": "Valor faltante o incorrecto"}
+        
+    # Paso 1: Cálculo del Esfuerzo Circunferencial (S)
+    s_hoop = (p_op * de) / (2.0 * t)
+    
+    # Paso 2: Definición de la Relación de Altura (h/D%)
+    # h = (dti / 100.0) * de, ratio_hd = (h / de) * 100 -> equivalent to dti
+    ratio_hd = dti
+    
+    # Paso 3: Lógica de Evaluación Condicional
+    if s_hoop <= 20000:
+        L_limit = 2.0
+    elif 20000 < s_hoop <= 30000:
+        L_limit = ((30000 - s_hoop) / 10000.0) + 1.0
+    elif 30000 < s_hoop <= 47000:
+        L_limit = 0.5 * (((47000 - s_hoop) / 17000.0) + 1.0)
+    else: # s_hoop > 47000
+        L_limit = 0.5
+        
+    # Paso 4: Criterio de Aceptación Final
+    is_acceptable = (ratio_hd <= L_limit)
+    
+    if interacts_girth:
+        dictamen = "No cumple (ASME B31.4 | Interactúa con Soldadura Girth)"
+    else:
+        if is_acceptable:
+            dictamen = "Cumple criterio (ASME B31.4 )"
+        else:
+            dictamen = "No cumple criterio (ASME B31.4 )"
+            
+    return {"Strain_calc": None, "Dictamen_Strain": dictamen}
+
+
 def classify_dent(row: pd.Series) -> dict:
     """
     Aplica la lógica de Sub dStrain() para una fila del DataFrame.
@@ -204,15 +252,35 @@ def classify_dent(row: pd.Series) -> dict:
     li   = _to_float(row.iloc[COL["Longitud_mm"]])
     W    = _to_float(row.iloc[COL["Ancho_mm"]])
     t    = _to_float(row.iloc[COL["Espesor"]])
+    p_op = _to_float(row.get("Presión (psi)", 0.0))
 
-    # ¿Es una abolladura?
-    if not is_dent(anomaly_type):
+    is_dent_flag = is_dent(anomaly_type)
+    is_wrinkle_flag = is_wrinkle_anomaly(anomaly_type)
+
+    # ¿Es una abolladura o arruga?
+    if not is_dent_flag and not is_wrinkle_flag:
         return {"Strain_calc": None, "Dictamen_Strain": "No evaluada"}
 
     # ¿Fue reparada?
     if is_repaired(comment):
         return {"Strain_calc": None, "Dictamen_Strain": "No evaluada (Reparada)"}
 
+    # Interacción con Soldaduras (API 1183 - Sección 6.5.1.1)
+    clock_pos = _parse_clock_position(row.iloc[COL["PosicionHoraria"]])
+    pos_dent  = _to_float(row.iloc[COL["Dregistro"]])
+    dist_girth = _get_girth_weld_dist(row.iloc[COL["DSoldInf"]], row.iloc[COL["DSoldSup"]], pos_dent)
+    weld_interaction = check_weld_interaction(de, dist_girth, clock_pos)
+    interacts_girth = weld_interaction.get("interacts_girth", False)
+
+    # -----------------------------------------------------------------------
+    # Evaluación de arrugas y ondulaciones (ASME B31.4 sección 451.6.2.8)
+    # -----------------------------------------------------------------------
+    if is_wrinkle_flag:
+        return evaluate_wrinkle(de, t, p_op, dti, interacts_girth)
+
+    # -----------------------------------------------------------------------
+    # Evaluación de abolladuras puras
+    # -----------------------------------------------------------------------
     # Validación de datos requeridos
     if t == 0 or de == 0 or dti == 0 or li == 0:
         return {"Strain_calc": None, "Dictamen_Strain": "Valor faltante o incorrecto"}
@@ -221,11 +289,6 @@ def classify_dent(row: pd.Series) -> dict:
     dti_mm = (dti / 100.0) * de
     if is_kinked_dent(de / 2.0, li, W, t, dti_mm):
         return {"Strain_calc": None, "Dictamen_Strain": "Abolladura plegada - requiere FFS"}
-
-    # Interacción con Soldaduras (API 1183 - Sección 6.5.1.1)
-    clock_pos = _parse_clock_position(row.iloc[COL["PosicionHoraria"]])
-    dist_girth = _get_girth_weld_dist(row.iloc[COL["DSoldInf"]], row.iloc[COL["DSoldSup"]])
-    weld_interaction = check_weld_interaction(de, dist_girth, clock_pos)
 
     # Cálculo de strain
     try:
@@ -237,7 +300,7 @@ def classify_dent(row: pd.Series) -> dict:
     # NOTA: Como en todos los casos de evaluación se desconoce la elongación específica 
     # del material (MTRs no disponibles), se deberá usar el criterio del 6% para tubería base,
     # y estrictamente del 4% (strain <= 4%) si la abolladura interactúa con una soldadura.
-    if weld_interaction["interacts_girth"]:
+    if interacts_girth:
         # Límite máximo permitido de deformación es estrictamente del 4% si interactúa con soldadura
         if abs(strain_val) >= 0.04:
             dictamen = "No cumple criterio (strain ≥ 4%)"
@@ -300,9 +363,11 @@ def _parse_clock_position(val) -> float:
     except (ValueError, TypeError):
         return 0.0
 
-def _get_girth_weld_dist(dsoldinf, dsoldsup) -> float:
+def _get_girth_weld_dist(dsoldinf, dsoldsup, pos_dent) -> float:
     """Obtiene la distancia mínima absoluta a la soldadura circunferencial.
-    Retorna float('inf') si ambos valores están vacíos o nulos.
+    Calcula la distancia relativa entre los marcadores absolutos (dsoldinf/sup) 
+    y la posición de la abolladura (pos_dent).
+    Retorna float('inf') si no hay información de soldaduras.
     """
     def is_empty(v):
         return pd.isna(v) or str(v).strip() == "" or v is None
@@ -326,7 +391,16 @@ def _get_girth_weld_dist(dsoldinf, dsoldsup) -> float:
     if v_inf == float('inf') and v_sup == float('inf'):
         return float('inf')
         
-    return min(abs(v_inf), abs(v_sup))
+    # Calcular distancias relativas
+    d_inf = abs(v_inf - pos_dent) if v_inf != float('inf') else float('inf')
+    d_sup = abs(v_sup - pos_dent) if v_sup != float('inf') else float('inf')
+        
+    dist_m = min(d_inf, d_sup)
+    
+    # Convertir de metros a milímetros para la evaluación API 1183
+    if dist_m == float('inf'):
+        return float('inf')
+    return dist_m * 1000.0
 
 def check_weld_interaction(de_mm: float, dist_girth_weld_mm: float, clock_pos: float) -> dict:
     """

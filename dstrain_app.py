@@ -301,6 +301,9 @@ with st.sidebar:
     else:
         show_all_cols = False
         
+    st.markdown("### 📊 Perfil de Presión")
+    presion_file = st.file_uploader("Seleccione presion.csv (Perfil de presión)", type=["csv"], key="presion")
+    
     st.markdown("### 🌊 Datos SCADA y Topología")
     juntas_file = st.file_uploader("Seleccione juntas_soldadura.csv", type=["csv"], key="juntas")
     scada_succion = st.file_uploader("SCADA Succión (CSV)", type=["csv"], key="succion")
@@ -368,6 +371,58 @@ if df_input.empty:
     st.warning("⚠️ No se encontraron datos en la hoja especificada.")
     st.stop()
 
+# ─── Combinar con Perfil de Presión ───────────────────────────────────────────
+if presion_file is not None:
+    try:
+        df_presion = safe_read_csv(presion_file)
+        
+        # Verificar columnas obligatorias (strip and lower to be safe)
+        cols_present = {c.strip().lower() for c in df_presion.columns}
+        req_cols = {"distancia_inicio_m", "distancia_fin_m", "presion"}
+        
+        # Encontrar columnas reales en el dataframe que coincidan (case insensitive)
+        actual_cols = {}
+        for rc in req_cols:
+            for c in df_presion.columns:
+                if c.strip().lower() == rc:
+                    actual_cols[rc] = c
+                    break
+
+        if len(actual_cols) == 3:
+            dist_col = "Dist. Registro (km)" if "Dist. Registro (km)" in df_input.columns else df_input.columns[0]
+            
+            # Convertir distancia a metros de manera vectorizada
+            dist_m = pd.to_numeric(df_input[dist_col], errors='coerce')
+            
+            # Crear un dataframe temporal ordenado para el merge
+            df_temp = pd.DataFrame({'dist_m': dist_m}, index=df_input.index).sort_values('dist_m')
+            
+            # Ordenar el dataframe de presiones por inicio de tramo
+            df_p = df_presion.sort_values(actual_cols["distancia_inicio_m"])
+            
+            # Merge vectorizado por proximidad hacia atrás (encuentra el intervalo de inicio)
+            merged = pd.merge_asof(
+                df_temp, 
+                df_p[[actual_cols["distancia_inicio_m"], actual_cols["distancia_fin_m"], actual_cols["presion"]]], 
+                left_on='dist_m', 
+                right_on=actual_cols["distancia_inicio_m"], 
+                direction='backward'
+            )
+            
+            # Anular la presión si la distancia resulta estar fuera del rango final del tramo
+            mask_out_of_bounds = merged['dist_m'] > merged[actual_cols["distancia_fin_m"]]
+            merged.loc[mask_out_of_bounds, actual_cols["presion"]] = None
+            
+            # Recuperar el orden original utilizando el índice
+            merged.index = df_temp.index
+            df_input["Presión (psi)"] = merged.loc[df_input.index, actual_cols["presion"]]
+            
+            st.success("✅ Perfil de presión cargado y combinado correctamente con los datos de entrada.")
+        else:
+            st.warning("⚠️ El archivo presion.csv no tiene las columnas esperadas (distancia_inicio_m, distancia_fin_m, presion).")
+    except Exception as e:
+        st.error(f"❌ Error al procesar presion.csv: {e}")
+
 n_rows = len(df_input)
 n_cols_in = len(df_input.columns)
 
@@ -421,9 +476,11 @@ if app_mode == "Análisis Rainflow":
     if st.button("▶ Ejecutar Análisis Rainflow en Abolladura", use_container_width=True):
         with st.spinner("Extrayendo topología y calculando ciclos…"):
             try:
-                dent_dict, station_dict = rainflow.extract_topological_data(juntas_path, selected_Lx)
+                df_juntas = safe_read_csv(juntas_path)
+                dent_dict, station_dict = rainflow.extract_topological_data(df_juntas, selected_Lx)
                 
                 analyzer = rainflow.DentSpectrumAnalyzer(specific_gravity, viscosity)
+                merged_scada = analyzer._merge_scada(df_descarga, df_succion, time_col='timestamp', pressure_col='presion_psi')
                 
                 cycles, time_span_years = analyzer.interpolate_pressure_timeseries(
                     scada_discharge_df=df_descarga,
@@ -431,7 +488,8 @@ if app_mode == "Análisis Rainflow":
                     dent_dict=dent_dict,
                     station_dict=station_dict,
                     time_col='timestamp',
-                    pressure_col='presion_psi'
+                    pressure_col='presion_psi',
+                    merged_scada=merged_scada
                 )
                 
                 if cycles:
@@ -490,22 +548,20 @@ st.markdown("---")
 # ─── Botón de cálculo ─────────────────────────────────────────────────────────
 st.markdown('<p class="section-title">Cálculo de Strain y Vida Remanente</p>', unsafe_allow_html=True)
 
-col_btn_1, col_btn_2, col_info = st.columns([1, 1, 3])
+col_btn_1, col_info = st.columns([1, 2])
 with col_btn_1:
-    run_btn = st.button("▶ Procesar Strain", use_container_width=True)
-with col_btn_2:
-    run_fatigue_btn = st.button("Calcular Vida Remanente", use_container_width=True)
+    run_eval_btn = st.button("▶ Evaluación de Abolladuras", use_container_width=True)
 
 with col_info:
     st.markdown("""
     <div style="color:#64748b; font-size:0.85rem; margin-top:0.5rem;">
-    Calcula la deformación de strain (API-1160) y/o Vida a la Fatiga (API-1183) para abolladuras.
+    Calcula simultáneamente la deformación de strain (API-1160) y Vida a la Fatiga (API-1183) para abolladuras.
     </div>
     """, unsafe_allow_html=True)
-df_input.to_csv("df_input.csv", index=False)
+# df_input.to_csv("df_input.csv", index=False)
 
-if run_btn or run_fatigue_btn or "df_result" in st.session_state:
-    if run_btn:
+if run_eval_btn or "df_result" in st.session_state:
+    if run_eval_btn:
         with st.spinner("Calculando strain para todas las anomalías…"):
             try:
                 df_result = process_dataframe(df_input.copy())
@@ -515,13 +571,10 @@ if run_btn or run_fatigue_btn or "df_result" in st.session_state:
             except Exception as e:
                 st.error(f"❌ Error durante el cálculo: {e}")
                 st.stop()
-    elif run_fatigue_btn:
+                
         with st.spinner("Calculando Vida Remanente para todas las abolladuras..."):
             try:
-                if "df_result" in st.session_state:
-                    df_res = st.session_state["df_result"].copy()
-                else:
-                    df_res = process_dataframe(df_input.copy()).reset_index(drop=True)
+                df_res = st.session_state["df_result"].copy()
                 
                 if not (juntas_file and scada_succion and scada_descarga):
                     st.error("⚠️ Para calcular la Vida Remanente, debe cargar los 3 archivos CSV laterales.")
@@ -550,6 +603,11 @@ if run_btn or run_fatigue_btn or "df_result" in st.session_state:
                 analyzer = rainflow.DentSpectrumAnalyzer(specific_gravity, viscosity)
                 dist_col = "Dist. Registro (km)" if "Dist. Registro (km)" in df_res.columns else df_res.columns[0]
                 
+                # --- Pre-calculate expensive operations ---
+                merged_scada = analyzer._merge_scada(df_descarga, df_succion, time_col='timestamp', pressure_col='presion_psi')
+                df_juntas = safe_read_csv(juntas_path)
+                # ----------------------------------------
+                
                 vidas = []
                 for idx, row in df_res.iterrows():
                     tipo_anomalia = str(row.iloc[COL["TipoAnomalia"]]).upper() if not pd.isna(row.iloc[COL["TipoAnomalia"]]) else ""
@@ -565,14 +623,15 @@ if run_btn or run_fatigue_btn or "df_result" in st.session_state:
                     clock_pos = _parse_clock_position(row.iloc[COL["PosicionHoraria"]])
                     
                     try:
-                        dent_dict, station_dict = rainflow.extract_topological_data(juntas_path, lx)
+                        dent_dict, station_dict = rainflow.extract_topological_data(df_juntas, lx)
                         cycles, time_span_years = analyzer.interpolate_pressure_timeseries(
                             scada_discharge_df=df_descarga,
                             scada_suction_df=df_succion,
                             dent_dict=dent_dict,
                             station_dict=station_dict,
                             time_col='timestamp',
-                            pressure_col='presion_psi'
+                            pressure_col='presion_psi',
+                            merged_scada=merged_scada
                         )
                         if cycles:
                             df_cycles = pd.DataFrame(cycles, columns=["Rango de Presión (psi)", "Conteo de Ciclos"])
@@ -584,6 +643,37 @@ if run_btn or run_fatigue_btn or "df_result" in st.session_state:
                         vidas.append(f"Error ({e})")
                         
                 df_res["Vida Remanente (Años)"] = vidas
+                
+                # --- NUEVO BLOQUE: Cálculo de Presión Segura ---
+                presiones_seguras = []
+                col_factor = "Factor Diseño" if "Factor Diseño" in df_res.columns else None
+                for idx, row in df_res.iterrows():
+                    tipo_anomalia = str(row.iloc[COL["TipoAnomalia"]]).upper() if not pd.isna(row.iloc[COL["TipoAnomalia"]]) else ""
+                    if "ABOL" not in tipo_anomalia and "DENT" not in tipo_anomalia:
+                        presiones_seguras.append("No evaluada")
+                        continue
+                        
+                    dti_pct = _to_float(row.iloc[COL["ProfPct"]])
+                    
+                    if dti_pct > 10.0:
+                        presiones_seguras.append("Requiere FFS")
+                    else:
+                        de_mm = _to_float(row.iloc[COL["DE"]])
+                        t_mm = _to_float(row.iloc[COL["Espesor"]])
+                        smys_psi = _to_float(row.iloc[COL["SMYS"]])
+                        fd = _to_float(row[col_factor]) if col_factor and not pd.isna(row[col_factor]) else 0.72
+                        if fd == 0.0:
+                            fd = 0.72
+                            
+                        if de_mm > 0 and t_mm > 0 and smys_psi > 0:
+                            p_segura = (2.0 * t_mm * smys_psi / de_mm) * fd
+                            presiones_seguras.append(round(p_segura, 2))
+                        else:
+                            presiones_seguras.append("Faltan datos")
+                            
+                df_res["Presión Segura (psi)"] = presiones_seguras
+                # -----------------------------------------------
+                
                 st.session_state["df_result"] = df_res
                 df_result = st.session_state["df_result"]
             except Exception as e:
@@ -619,7 +709,7 @@ if run_btn or run_fatigue_btn or "df_result" in st.session_state:
 
     # ─── DataFrame de resultados ──────────────────────────────────────────────
     # Columnas a mostrar: datos clave + resultados
-    res_cols_to_show = key_cols + ["Strain_calc", "Dictamen_Strain", "Vida Remanente (Años)"]
+    res_cols_to_show = key_cols + ["Strain_calc", "Dictamen_Strain", "Vida Remanente (Años)", "Presión Segura (psi)"]
     res_cols_to_show = [c for c in res_cols_to_show if c in df_result.columns]
 
     df_display = df_result[res_cols_to_show].copy()

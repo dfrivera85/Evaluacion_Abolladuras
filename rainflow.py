@@ -188,10 +188,13 @@ def extract_topological_data(juntas_csv_path, Lx):
       - dent_dict: Lx, hx, D1, D2
       - station_dict: L1, h1, L2, h2
     """
-    try:
-        df = pd.read_csv(juntas_csv_path)
-    except UnicodeDecodeError:
-        df = pd.read_csv(juntas_csv_path, encoding='latin1')
+    if isinstance(juntas_csv_path, str):
+        try:
+            df = pd.read_csv(juntas_csv_path)
+        except UnicodeDecodeError:
+            df = pd.read_csv(juntas_csv_path, encoding='latin1')
+    else:
+        df = juntas_csv_path
     
     # L1 y h1: estación de bombeo aguas arriba
     idx_min = df['distancia_inicio_m'].idxmin()
@@ -220,8 +223,8 @@ def extract_topological_data(juntas_csv_path, Lx):
     dent_dict = {'Lx': Lx, 'hx': hx, 'D1': D1, 'D2': D2}
     station_dict = {'L1': L1, 'h1': h1, 'L2': L2, 'h2': h2}
     
-    pd.DataFrame([dent_dict]).to_csv('dent_dict.csv', index=False)
-    pd.DataFrame([station_dict]).to_csv('station_dict.csv', index=False)
+    # pd.DataFrame([dent_dict]).to_csv('dent_dict.csv', index=False)
+    # pd.DataFrame([station_dict]).to_csv('station_dict.csv', index=False)
 
     return dent_dict, station_dict
 
@@ -275,20 +278,24 @@ class DentSpectrumAnalyzer:
 
         return merged_clean
 
-    def interpolate_pressure_timeseries(self, scada_discharge_df, scada_suction_df, dent_dict, station_dict, time_col='timestamp', pressure_col='pressure_psi'):
+    def interpolate_pressure_timeseries(self, scada_discharge_df, scada_suction_df, dent_dict, station_dict, time_col='timestamp', pressure_col='pressure_psi', merged_scada=None):
         """
         Aplica el Enfoque A (Ecuación 5 - Interpolación en el dominio del tiempo).
         Estima el Px (presión en la abolladura) y devuelve una tupla: (conteos de 25 bins, time_span_years).
         """
-        merged = self._merge_scada(scada_discharge_df, scada_suction_df, time_col, pressure_col)
+        if merged_scada is not None:
+            merged = merged_scada
+        else:
+            merged = self._merge_scada(scada_discharge_df, scada_suction_df, time_col, pressure_col)
+            
         if merged.empty:
             return [], 0.0
             
         P1 = merged[f'{pressure_col}_discharge'].values
         P2 = merged[f'{pressure_col}_suction'].values
         
-        pd.DataFrame([P1]).to_csv('P1.csv', index=False)
-        pd.DataFrame([P2]).to_csv('P2.csv', index=False)
+        # pd.DataFrame([P1]).to_csv('P1.csv', index=False)
+        # pd.DataFrame([P2]).to_csv('P2.csv', index=False)
 
 
         L1, h1 = station_dict['L1'], station_dict['h1']
@@ -319,7 +326,7 @@ class DentSpectrumAnalyzer:
         # Px = (P1 + K*h1 - P2 - K*h2)*(factor) - K*(hx - h2) + P2
         Px = (P1 + self.K * h1 - P2 - self.K * h2) * factor - self.K * (hx - h2) + P2
         
-        pd.DataFrame([Px]).to_csv('Px.csv', index=False)
+        # pd.DataFrame([Px]).to_csv('Px.csv', index=False)
         
         # Calcular la duración (Time Span) en años
         time_diff = merged[time_col].max() - merged[time_col].min()
